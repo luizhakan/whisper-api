@@ -3,17 +3,42 @@ import subprocess
 import os
 import sys
 import glob
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile
+import uuid
+from datetime import datetime
+import shutil
 
 app = FastAPI()
 # --- CONFIGURAÇÕES ---
-ARQUIVO_AUDIO = "teste6.ogg"
+# ARQUIVO_AUDIO = "teste6.ogg"
 
 @app.get("/")
 async def root():
-    texto_raw = ouvir_audio(ARQUIVO_AUDIO)
-    return texto_raw
+    # texto_raw = ouvir_audio(ARQUIVO_AUDIO)
+    return f"API EM FUNCIONAMENTO - {datetime.now()}"
 
+@app.post("/transcrever/")
+async def transcricao(arquivo: UploadFile = File(...)):
+    extensao = arquivo.filename.split(".")[-1]
+    nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
+    
+    try:
+        with open(nome_temporario, "wb") as buffer:
+            shutil.copyfileobj(arquivo.file, buffer)
+            texto_transcrito = ouvir_audio(nome_temporario)
+
+            return {
+                "nome_arquivo": arquivo.filename,
+                "transcricao": texto_transcrito
+            }
+        
+    except Exception as e:
+        return {"erro": str(e)}
+    
+    finally:
+        if os.path.exists(nome_temporario):
+            os.remove(nome_temporario)
+            print(f"🧹 Arquivo temporário removido.")
 
 # Busca automática pelo modelo Qwen3
 arquivos_modelo = glob.glob("*Qwen3-4B*Q4_K_M.gguf")

@@ -1,14 +1,55 @@
 import whisper
-import subprocess
 import os
-import sys
 import glob
+from typing import Optional
 from fastapi import FastAPI, File, UploadFile
 import uuid
 from datetime import datetime
 import shutil
+from llama_cpp import Llama
 
 app = FastAPI()
+
+# --- CARREGAMENTO DO MODELO ---
+print("🔄 Carregando modelo Whisper large-v3...")
+MODELO_WHISPER = whisper.load_model("large-v3")
+print("✅ Modelo Whisper carregado com sucesso!")
+
+MODELO_QWEN: Optional[Llama] = None
+ERRO_MODELO_QWEN: Optional[str] = None
+
+
+def carregar_modelo_qwen():
+    global MODELO_QWEN, ERRO_MODELO_QWEN
+
+    arquivos_modelo = glob.glob("*Qwen3-4B*Q4_K_M.gguf")
+    if not arquivos_modelo:
+        ERRO_MODELO_QWEN = "Modelo Qwen3 não encontrado no diretório do projeto."
+        print(f"⚠️  {ERRO_MODELO_QWEN}")
+        return
+
+    modelo_gguf = os.path.abspath(arquivos_modelo[0])
+    print(f"🔄 Carregando modelo Qwen3 ({arquivos_modelo[0]})...")
+    print(f"   Caminho: {modelo_gguf}")
+
+    try:
+        MODELO_QWEN = Llama(
+            model_path=modelo_gguf,
+            n_ctx=8192,
+            n_threads=6,
+            verbose=True
+        )
+        print("✅ Modelo Qwen3 carregado com sucesso!")
+    except Exception as exc:
+        MODELO_QWEN = None
+        ERRO_MODELO_QWEN = str(exc)
+        print("⚠️  Falha ao carregar o Qwen3. API seguirá ativa sem correção de texto.")
+        print(f"   Detalhes: {ERRO_MODELO_QWEN}")
+        print("   Dica: atualize para `llama-cpp-python>=0.3.16` e reinstale as dependências.")
+
+
+carregar_modelo_qwen()
+
 # --- CONFIGURAÇÕES ---
 # ARQUIVO_AUDIO = "teste6.ogg"
 
@@ -40,24 +81,20 @@ async def transcricao(arquivo: UploadFile = File(...)):
             os.remove(nome_temporario)
             print(f"🧹 Arquivo temporário removido.")
 
-# Busca automática pelo modelo Qwen3
-arquivos_modelo = glob.glob("*Qwen3-4B*Q4_K_M.gguf")
-if not arquivos_modelo:
-    print("❌ Erro: Modelo Qwen3 não encontrado.")
-    sys.exit(1)
-
-MODELO_GGUF = f"./{arquivos_modelo[0]}"
-CAMINHO_LLAMA_CLI = "./llama-cli"
-
 def ouvir_audio(arquivo):
-    print(f"\n🎧 Ouvindo (Whisper Medium)... ", end="", flush=True)
-    model = whisper.load_model("large-v3") 
-    result = model.transcribe(arquivo, language='pt')
+    print(f"\n🎧 Ouvindo (Whisper Large-v3)... ", end="", flush=True)
+    result = MODELO_WHISPER.transcribe(arquivo, language='pt')
     texto = result["text"].strip()
     print("✅")
     return texto
 
 def corrigir_texto(texto_bagunçado):
+    if MODELO_QWEN is None:
+        print("⚠️  Qwen3 indisponível, retornando texto original.")
+        if ERRO_MODELO_QWEN:
+            print(f"   Motivo: {ERRO_MODELO_QWEN}")
+        return texto_bagunçado
+
     print("✍️  Qwen3 passando a limpo... ", end="", flush=True)
     
     # --- PROMPT: O CORRETOR INVISÍVEL ---
@@ -77,26 +114,14 @@ def corrigir_texto(texto_bagunçado):
         f"<|im_start|>assistant\n"
     )
     
-    comando = [
-        CAMINHO_LLAMA_CLI,
-        "-m", MODELO_GGUF,
-        "-p", prompt_final,
-        "-n", "4096",
-        "-c", "8192",   
-        "-t", "6",
-        "--no-display-prompt", 
-        "--log-disable"
-    ]
-    
-    resultado = subprocess.run(
-        comando, 
-        capture_output=True, 
-        text=True,
-        encoding='utf-8', 
-        errors='ignore'
+    resposta = MODELO_QWEN(
+        prompt_final,
+        max_tokens=4096,
+        temperature=0.3,
+        stop=["<|im_end|>"]
     )
     
-    saida = resultado.stdout.strip()
+    saida = resposta['choices'][0]['text'].strip()
     print("✅")
     return saida
 

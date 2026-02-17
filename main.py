@@ -60,6 +60,7 @@ async def root():
 
 @app.post("/transcrever/")
 async def transcricao(arquivo: UploadFile = File(...)):
+    """Endpoint que faz apenas a transcrição do áudio, sem correções."""
     extensao = arquivo.filename.split(".")[-1]
     nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
     
@@ -71,6 +72,32 @@ async def transcricao(arquivo: UploadFile = File(...)):
             return {
                 "nome_arquivo": arquivo.filename,
                 "transcricao": texto_transcrito
+            }
+        
+    except Exception as e:
+        return {"erro": str(e)}
+    
+    finally:
+        if os.path.exists(nome_temporario):
+            os.remove(nome_temporario)
+            print(f"🧹 Arquivo temporário removido.")
+
+@app.post("/transcrever-e-corrigir/")
+async def transcricao_com_correcao(arquivo: UploadFile = File(...)):
+    """Endpoint que faz a transcrição e aplica correção de texto com Qwen3."""
+    extensao = arquivo.filename.split(".")[-1]
+    nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
+    
+    try:
+        with open(nome_temporario, "wb") as buffer:
+            shutil.copyfileobj(arquivo.file, buffer)
+            texto_transcrito = ouvir_audio(nome_temporario)
+            texto_corrigido = corrigir_texto(texto_transcrito)
+
+            return {
+                "nome_arquivo": arquivo.filename,
+                "transcricao_original": texto_transcrito,
+                "transcricao_corrigida": texto_corrigido
             }
         
     except Exception as e:

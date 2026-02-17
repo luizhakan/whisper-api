@@ -61,6 +61,9 @@ async def root():
 @app.post("/transcrever/")
 async def transcricao(arquivo: UploadFile = File(...)):
     """Endpoint que faz apenas a transcrição do áudio, sem correções."""
+    inicio = datetime.now()
+    print(f"\n⏱️  Requisição iniciada em: {inicio.strftime('%H:%M:%S')}")
+    
     extensao = arquivo.filename.split(".")[-1]
     nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
     
@@ -69,12 +72,23 @@ async def transcricao(arquivo: UploadFile = File(...)):
             shutil.copyfileobj(arquivo.file, buffer)
             texto_transcrito = ouvir_audio(nome_temporario)
 
+            fim = datetime.now()
+            duracao = (fim - inicio).total_seconds()
+            print(f"⏱️  Requisição finalizada em: {fim.strftime('%H:%M:%S')}")
+            print(f"⏱️  Duração total: {duracao:.2f} segundos\n")
+
             return {
                 "nome_arquivo": arquivo.filename,
-                "transcricao": texto_transcrito
+                "transcricao": texto_transcrito,
+                "horario_inicio": inicio.strftime('%H:%M:%S'),
+                "horario_fim": fim.strftime('%H:%M:%S'),
+                "duracao_segundos": round(duracao, 2)
             }
         
     except Exception as e:
+        fim = datetime.now()
+        duracao = (fim - inicio).total_seconds()
+        print(f"❌ Erro após {duracao:.2f} segundos\n")
         return {"erro": str(e)}
     
     finally:
@@ -85,6 +99,9 @@ async def transcricao(arquivo: UploadFile = File(...)):
 @app.post("/transcrever-e-corrigir/")
 async def transcricao_com_correcao(arquivo: UploadFile = File(...)):
     """Endpoint que faz a transcrição e aplica correção de texto com Qwen3."""
+    inicio = datetime.now()
+    print(f"\n⏱️  Requisição iniciada em: {inicio.strftime('%H:%M:%S')}")
+    
     extensao = arquivo.filename.split(".")[-1]
     nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
     
@@ -94,13 +111,24 @@ async def transcricao_com_correcao(arquivo: UploadFile = File(...)):
             texto_transcrito = ouvir_audio(nome_temporario)
             texto_corrigido = corrigir_texto(texto_transcrito)
 
+            fim = datetime.now()
+            duracao = (fim - inicio).total_seconds()
+            print(f"⏱️  Requisição finalizada em: {fim.strftime('%H:%M:%S')}")
+            print(f"⏱️  Duração total: {duracao:.2f} segundos\n")
+
             return {
                 "nome_arquivo": arquivo.filename,
                 "transcricao_original": texto_transcrito,
-                "transcricao_corrigida": texto_corrigido
+                "transcricao_corrigida": texto_corrigido,
+                "horario_inicio": inicio.strftime('%H:%M:%S'),
+                "horario_fim": fim.strftime('%H:%M:%S'),
+                "duracao_segundos": round(duracao, 2)
             }
         
     except Exception as e:
+        fim = datetime.now()
+        duracao = (fim - inicio).total_seconds()
+        print(f"❌ Erro após {duracao:.2f} segundos\n")
         return {"erro": str(e)}
     
     finally:

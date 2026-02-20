@@ -7,6 +7,15 @@ import uuid
 from datetime import datetime
 import shutil
 from llama_cpp import Llama
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.mime.base import MIMEBase
+from email import encoders
+from dotenv import load_dotenv
+
+# Carrega variáveis de ambiente
+load_dotenv()
 
 app = FastAPI()
 
@@ -17,6 +26,10 @@ print("✅ Modelo Whisper carregado com sucesso!")
 
 MODELO_QWEN: Optional[Llama] = None
 ERRO_MODELO_QWEN: Optional[str] = None
+
+# Configuração de email
+EMAIL_REMETENTE = "hakanluiz96@gmail.com"
+SENHA_GOOGLE = os.getenv("APP_SENHA_GOOGLE")
 
 
 def carregar_modelo_qwen():
@@ -180,7 +193,284 @@ def corrigir_texto(texto_bagunçado):
     print("✅")
     return saida
 
-# # --- EXECUÇÃO ---
+def enviar_email_gmail(destinatario: str, assunto: str, corpo_html: str):
+    """Envia email via SMTP do Gmail com os resultados das transcrições."""
+    try:
+        # Configura a conexão SMTP
+        servidor_smtp = "smtp.gmail.com"
+        porta = 587
+        
+        # Cria a mensagem
+        mensagem = MIMEMultipart("alternative")
+        mensagem["From"] = EMAIL_REMETENTE
+        mensagem["To"] = destinatario
+        mensagem["Subject"] = assunto
+        
+        # Adiciona o corpo em HTML
+        parte_html = MIMEText(corpo_html, "html")
+        mensagem.attach(parte_html)
+        
+        # Conecta e envia
+        print(f"\n📧 Conectando ao servidor SMTP do Gmail...")
+        with smtplib.SMTP(servidor_smtp, porta) as server:
+            server.starttls()  # Inicia a conexão segura
+            server.login(EMAIL_REMETENTE, SENHA_GOOGLE)
+            print(f"✅ Autenticado com sucesso!")
+            
+            print(f"📤 Enviando email para {destinatario}...")
+            server.send_message(mensagem)
+            print(f"✅ Email enviado com sucesso!")
+            
+        return {"status": "sucesso", "mensagem": "Email enviado com sucesso"}
+        
+    except smtplib.SMTPAuthenticationError:
+        erro = "Erro de autenticação. Verifique a senha do Google."
+        print(f"❌ {erro}")
+        return {"status": "erro", "mensagem": erro}
+    except Exception as e:
+        erro = f"Erro ao enviar email: {str(e)}"
+        print(f"❌ {erro}")
+        return {"status": "erro", "mensagem": erro}
+
+@app.post("/transcrever-e-enviar/")
+async def transcrever_e_enviar(
+    arquivos: list[UploadFile] = File(...),
+    destinatario: str = None,
+    corrigir: bool = False
+):
+    """
+    Endpoint que recebe múltiplos áudios, transcreve na ordem enviada
+    e envia um email com todos os resultados.
+    
+    Parâmetros:
+    - arquivos: Lista de arquivos de áudio
+    - destinatario: Email para enviar os resultados (obrigatório)
+    - corrigir: Se True, aplica correção com Qwen3 (padrão: False)
+    
+    Exemplo com curl:
+    curl -X POST http://localhost:8000/transcrever-e-enviar/ \
+      -F "arquivos=@audio1.mp3" \
+      -F "arquivos=@audio2.mp3" \
+      -F "destinatario=seu@email.com" \
+      -F "corrigir=false"
+    """
+    
+    if not destinatario:
+        return {
+            "erro": "Parâmetro 'destinatario' é obrigatório",
+            "exemplo": "?destinatario=seu@email.com"
+        }
+    
+    if not arquivos:
+        return {"erro": "Nenhum arquivo foi enviado"}
+    
+    inicio_geral = datetime.now()
+    print(f"\n{'='*70}")
+    print(f"🚀 PROCESSAMENTO EM LOTE - Múltiplos Áudios")
+    print(f"⏱️  Iniciado em: {inicio_geral.strftime('%H:%M:%S')}")
+    print(f"📧 Email de destino: {destinatario}")
+    print(f"🔧 Correção: {'Sim (Qwen3)' if corrigir else 'Não'}")
+    print(f"📦 Quantidade de áudios: {len(arquivos)}")
+    print(f"{'='*70}\n")
+    
+    resultados = []
+    
+    try:
+        # Processa cada áudio na ordem
+        for índice, arquivo in enumerate(arquivos, 1):
+            print(f"\n📍 [{índice}/{len(arquivos)}] Processando: {arquivo.filename}")
+            
+            extensao = arquivo.filename.split(".")[-1]
+            nome_temporario = f"temp_{uuid.uuid4()}.{extensao}"
+            
+            try:
+                inicio_arquivo = datetime.now()
+                
+                with open(nome_temporario, "wb") as buffer:
+                    shutil.copyfileobj(arquivo.file, buffer)
+                    
+                    # Transcreve
+                    texto_transcrito = ouvir_audio(nome_temporario)
+                    
+                    # Opcionalmente corrige
+                    if corrigir:
+                        texto_final = corrigir_texto(texto_transcrito)
+                    else:
+                        texto_final = texto_transcrito
+                    
+                    fim_arquivo = datetime.now()
+                    duracao_arquivo = (fim_arquivo - inicio_arquivo).total_seconds()
+                    
+                    resultado_item = {
+                        "número": índice,
+                        "arquivo": arquivo.filename,
+                        "transcricao": texto_final,
+                        "corrigida": corrigir,
+                        "duracao_segundos": round(duracao_arquivo, 2)
+                    }
+                    
+                    resultados.append(resultado_item)
+                    print(f"   ✅ Concluído em {duracao_arquivo:.2f}s")
+                    
+            except Exception as e:
+                print(f"   ❌ Erro: {str(e)}")
+                resultados.append({
+                    "número": índice,
+                    "arquivo": arquivo.filename,
+                    "erro": str(e)
+                })
+            
+            finally:
+                if os.path.exists(nome_temporario):
+                    os.remove(nome_temporario)
+        
+        # Gera HTML para email
+        corpo_html = gerar_html_email(resultados, corrigir)
+        
+        # Envia email
+        print(f"\n{'─'*70}")
+        resultado_email = enviar_email_gmail(
+            destinatario=destinatario,
+            assunto="📝 Transcrição de Áudios Concluída",
+            corpo_html=corpo_html
+        )
+        
+        fim_geral = datetime.now()
+        duracao_geral = (fim_geral - inicio_geral).total_seconds()
+        
+        print(f"\n{'='*70}")
+        print(f"✅ PROCESSO CONCLUÍDO COM SUCESSO!")
+        print(f"⏱️  Finalizado em: {fim_geral.strftime('%H:%M:%S')}")
+        print(f"⏱️  Duração total: {duracao_geral:.2f} segundos")
+        print(f"{'='*70}\n")
+        
+        return {
+            "status": "sucesso",
+            "total_arquivos": len(arquivos),
+            "email_enviado": resultado_email.get("status") == "sucesso",
+            "mensagem_email": resultado_email.get("mensagem"),
+            "resultados": resultados,
+            "horario_inicio": inicio_geral.strftime('%H:%M:%S'),
+            "horario_fim": fim_geral.strftime('%H:%M:%S'),
+            "duracao_total_segundos": round(duracao_geral, 2)
+        }
+        
+    except Exception as e:
+        fim_geral = datetime.now()
+        duracao_geral = (fim_geral - inicio_geral).total_seconds()
+        
+        print(f"\n❌ ERRO GERAL: {str(e)}")
+        print(f"⏱️  Duração até o erro: {duracao_geral:.2f} segundos\n")
+        
+        return {
+            "status": "erro",
+            "erro": str(e),
+            "resultados_parciais": resultados,
+            "duracao_segundos": round(duracao_geral, 2)
+        }
+
+def gerar_html_email(resultados: list, corrigir: bool) -> str:
+    """Gera o HTML para o email com os resultados das transcrições."""
+    
+    itens_html = ""
+    for item in resultados:
+        if "erro" in item:
+            itens_html += f"""
+            <div style="margin: 20px 0; padding: 15px; background-color: #ffe6e6; border-left: 4px solid #dc3545; border-radius: 4px;">
+                <strong style="color: #dc3545;">❌ {item['arquivo']}</strong>
+                <p style="margin: 10px 0; color: #666;"><strong>Erro:</strong> {item['erro']}</p>
+            </div>
+            """
+        else:
+            itens_html += f"""
+            <div style="margin: 20px 0; padding: 15px; background-color: #e6f3ff; border-left: 4px solid #0066cc; border-radius: 4px;">
+                <strong style="color: #0066cc;">✅ Áudio {item['número']}: {item['arquivo']}</strong>
+                <p style="margin: 10px 0; color: #666;"><strong>Duração:</strong> {item['duracao_segundos']}s</p>
+                <p style="margin: 10px 0; padding: 10px; background-color: white; border-radius: 4px; color: #333;">
+                    <strong>Transcrição{'  (Corrigida)' if item.get('corrigida') else ''}:</strong><br/>
+                    {item['transcricao']}
+                </p>
+            </div>
+            """
+    
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <meta charset="UTF-8">
+        <style>
+            body {{
+                font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+                line-height: 1.6;
+                color: #333;
+            }}
+            .container {{
+                max-width: 800px;
+                margin: 0 auto;
+                padding: 20px;
+                background-color: #f5f5f5;
+            }}
+            .header {{
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: white;
+                padding: 30px;
+                border-radius: 8px;
+                margin-bottom: 30px;
+            }}
+            .header h1 {{
+                margin: 0;
+                font-size: 24px;
+            }}
+            .header p {{
+                margin: 10px 0 0 0;
+                opacity: 0.9;
+            }}
+            .resumo {{
+                background-color: white;
+                padding: 15px;
+                margin-bottom: 20px;
+                border-radius: 4px;
+                border-left: 4px solid #667eea;
+            }}
+            .footer {{
+                text-align: center;
+                margin-top: 30px;
+                color: #999;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="header">
+                <h1>📝 Transcrição de Áudios Concluída</h1>
+                <p>Seus áudios foram processados e transcritos com sucesso!</p>
+            </div>
+            
+            <div class="resumo">
+                <strong>📊 Resumo do Processamento:</strong>
+                <ul style="margin: 10px 0;">
+                    <li><strong>Total de áudios:</strong> {len(resultados)}</li>
+                    <li><strong>Correção aplicada:</strong> {'Sim (Qwen3 IA)' if corrigir else 'Não'}</li>
+                    <li><strong>Data:</strong> {datetime.now().strftime('%d/%m/%Y às %H:%M:%S')}</li>
+                </ul>
+            </div>
+            
+            <div>
+                <strong style="font-size: 18px;">📋 Resultados Detalhados:</strong>
+                {itens_html}
+            </div>
+            
+            <div class="footer">
+                <p>Este email foi gerado automaticamente pela API Whisper.</p>
+                <p>Não responda este email.</p>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+    
+    return html
 # if __name__ == "__main__":
 #     if not os.path.exists(ARQUIVO_AUDIO):
 #         print(f"❌ Arquivo '{ARQUIVO_AUDIO}' não encontrado.")

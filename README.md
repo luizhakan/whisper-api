@@ -2,7 +2,117 @@
 
 Este projeto é uma implementação da API Whisper, que permite a transcrição de áudio em texto.
 
-## Pré-requisitos
+## 🆕 Nova Funcionalidade: Transcrição em Lote com Envio de Email
+
+### Endpoint: `/transcrever-e-enviar/`
+
+Permite enviar **múltiplos áudios** simultaneamente, transcrever todos na ordem enviada e receber os resultados via **email** (Gmail SMTP).
+
+#### Características:
+
+✅ Transcrição de múltiplos áudios em uma única requisição  
+✅ Processamento ordenado (na ordem enviada)  
+✅ Correção opcional com IA (Qwen3)  
+✅ Envio automático via email Gmail  
+✅ Relatório HTML formatado  
+✅ Tracking de tempo de processamento  
+
+#### Parâmetros:
+
+| Parâmetro | Tipo | Obrigatório | Descrição |
+|-----------|------|-------------|-----------|
+| `arquivos` | List[File] | ✅ Sim | Lista de arquivos de áudio |
+| `destinatario` | String | ✅ Sim | Email para enviar os resultados |
+| `corrigir` | Boolean | ❌ Não | Aplicar correção com Qwen3 (padrão: false) |
+
+#### Exemplos de Uso:
+
+**Com curl (sem correção):**
+```bash
+curl -X POST http://localhost:8000/transcrever-e-enviar/ \
+  -F "arquivos=@audio1.mp3" \
+  -F "arquivos=@audio2.mp3" \
+  -F "arquivos=@audio3.wav" \
+  -F "destinatario=seu@email.com"
+```
+
+**Com curl (com correção):**
+```bash
+curl -X POST http://localhost:8000/transcrever-e-enviar/ \
+  -F "arquivos=@audio1.mp3" \
+  -F "arquivos=@audio2.mp3" \
+  -F "destinatario=seu@email.com" \
+  -F "corrigir=true"
+```
+
+**Com Python requests:**
+```python
+import requests
+
+files = [
+    ('arquivos', open('audio1.mp3', 'rb')),
+    ('arquivos', open('audio2.mp3', 'rb')),
+]
+data = {
+    'destinatario': 'seu@email.com',
+    'corrigir': False
+}
+
+response = requests.post(
+    'http://localhost:8000/transcrever-e-enviar/',
+    files=files,
+    data=data
+)
+
+print(response.json())
+```
+
+#### Resposta (Exemplo):
+
+```json
+{
+  "status": "sucesso",
+  "total_arquivos": 2,
+  "email_enviado": true,
+  "mensagem_email": "Email enviado com sucesso",
+  "resultados": [
+    {
+      "número": 1,
+      "arquivo": "audio1.mp3",
+      "transcricao": "Olá, esta é a primeira transcrição",
+      "corrigida": false,
+      "duracao_segundos": 15.42
+    },
+    {
+      "número": 2,
+      "arquivo": "audio2.mp3",
+      "transcricao": "Segunda transcrição finalizada",
+      "corrigida": false,
+      "duracao_segundos": 8.21
+    }
+  ],
+  "horario_inicio": "14:30:45",
+  "horario_fim": "14:31:12",
+  "duracao_total_segundos": 27.63
+}
+```
+
+#### Configuração do Email:
+
+1. **Variável de Ambiente**: Adicione ao arquivo `.env`:
+```
+APP_SENHA_GOOGLE=seu_app_password_aqui
+```
+
+2. **Como gerar a Senha do App no Gmail:**
+   - Ative a autenticação de 2 fatores na sua conta Google
+   - Acesse [Google App Passwords](https://myaccount.google.com/apppasswords)
+   - Selecione "Mail" e "Windows Computer"
+   - Copie a senha gerada e adicione ao `.env`
+
+#### Endpoints Existentes:
+
+
 
 Antes de começar, você precisará ter os seguintes itens instalados:
 

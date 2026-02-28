@@ -2,3 +2,6 @@ __pycache__
 venv
 *.gguf
 .env
+logs/
+qrcode.png
+temp_webhook_*

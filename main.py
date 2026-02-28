@@ -2,7 +2,7 @@ import whisper
 import os
 import glob
 from typing import Optional
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, Request, BackgroundTasks, HTTPException
 import uuid
 from datetime import datetime
 import shutil
@@ -30,6 +30,9 @@ ERRO_MODELO_QWEN: Optional[str] = None
 # Configuração de email
 EMAIL_REMETENTE = "hakanluiz96@gmail.com"
 SENHA_GOOGLE = os.getenv("APP_SENHA_GOOGLE")
+
+# Configuração do webhook Evolution API
+WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "")
 
 
 def carregar_modelo_qwen():
@@ -68,8 +71,67 @@ carregar_modelo_qwen()
 
 @app.get("/")
 async def root():
-    # texto_raw = ouvir_audio(ARQUIVO_AUDIO)
     return f"API EM FUNCIONAMENTO - {datetime.now()}"
+
+
+# ============================================
+# ENDPOINTS - EVOLUTION API (WEBHOOK WHATSAPP)
+# ============================================
+
+
+@app.post("/webhook/evolution")
+async def webhook_evolution(request: Request, background_tasks: BackgroundTasks):
+    """
+    Endpoint que recebe eventos da Evolution API.
+    Filtra apenas mensagens de áudio, transcreve com Whisper
+    e envia a transcrição para o NUMERO_DESTINO via WhatsApp.
+
+    Header obrigatório: Authorization: Bearer {WEBHOOK_TOKEN}
+    """
+    # Valida autenticação
+    if WEBHOOK_TOKEN:
+        auth_header = request.headers.get("authorization", "")
+        # Aceita tanto "Bearer TOKEN" quanto "TOKEN" direto
+        token = auth_header.replace("Bearer ", "").strip()
+        if token != WEBHOOK_TOKEN:
+            raise HTTPException(status_code=403, detail="Token inválido")
+
+    # Parseia o payload
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Payload JSON inválido")
+
+    # Processa em background (Whisper na CPU pode levar 30s-2min)
+    # Responde 200 imediatamente para não travar a Evolution API
+    from evolution.webhook_handler import processar_webhook
+    from evolution.client import enviar_texto
+
+    background_tasks.add_task(
+        processar_webhook,
+        data=data,
+        fn_transcrever=ouvir_audio,
+        fn_enviar_texto=enviar_texto,
+    )
+
+    return {"status": "recebido", "processando": True}
+
+
+@app.get("/webhook/evolution/status")
+async def webhook_status():
+    """Health check do webhook — útil para verificar se o endpoint está ativo."""
+    return {
+        "status": "ativo",
+        "webhook_token_configurado": bool(WEBHOOK_TOKEN),
+        "numero_destino": os.getenv("NUMERO_DESTINO", "não configurado"),
+        "evolution_instance": os.getenv("EVOLUTION_INSTANCE", "não configurado"),
+        "horario": datetime.now().strftime("%d/%m/%Y %H:%M:%S"),
+    }
+
+
+# ============================================
+# ENDPOINTS - TRANSCRIÇÃO DIRETA
+# ============================================
 
 @app.post("/transcrever/")
 async def transcricao(arquivo: UploadFile = File(...)):

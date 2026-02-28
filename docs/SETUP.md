@@ -37,11 +37,9 @@ A Evolution API é o serviço que faz a ponte entre o WhatsApp e a sua aplicaç�
 Crie uma pasta para a Evolution API e dentro dela o arquivo:
 
 ```yaml
-version: "3.7"
-
 services:
   evolution-api:
-    image: atendai/evolution-api:v2.3.0
+    image: atendai/evolution-api:v2.2.3
     container_name: evolution-api
     restart: always
     ports:

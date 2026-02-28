@@ -102,11 +102,9 @@ def testar_conexao(url, apikey):
 
 TOTAL_PASSOS = 6
 
-DOCKER_COMPOSE_TEMPLATE = """version: "3.7"
-
-services:
+DOCKER_COMPOSE_TEMPLATE = """services:
   evolution-api:
-    image: atendai/evolution-api:v2.3.0
+    image: atendai/evolution-api:v2.2.3
     container_name: evolution-api
     restart: always
     ports:

@@ -434,12 +434,13 @@ def passo_2_instancia(url, global_key):
                 print("  ⚠️  Opção inválida, criando nova instância...")
                 escolha = "0"
 
+    dados_criacao = None
     if not instance_name:
         # Criar nova instância
         instance_name = perguntar("Nome da nova instância", "whisper-bot")
-        instance_key = _criar_instancia_com_retry(url, global_key, instance_name)
+        instance_key, dados_criacao = _criar_instancia_com_retry(url, global_key, instance_name)
 
-    return instance_name, instance_key
+    return instance_name, instance_key, dados_criacao
 
 
 def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5):
@@ -481,7 +482,9 @@ def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5)
                 else:
                     print("  ⚠️  Não foi possível obter a API key automaticamente.")
                     instance_key = perguntar("Cole a API Key da instância (hash)")
-                return instance_key
+                
+                # Salva os dados de criação para uso imediato do QR (se veio nela)
+                return instance_key, data
 
             else:
                 print(f"  ❌ Erro: {resp.status_code} — {resp.text[:200]}")
@@ -514,10 +517,10 @@ def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5)
                 sys.exit(1)
 
     # Fallback (não deve chegar aqui)
-    return perguntar("API Key da instância (hash)")
+    return perguntar("API Key da instância (hash)"), {}
 
 
-def passo_3_conectar(url, instance_name, instance_key):
+def passo_3_conectar(url, instance_name, instance_key, dados_criacao=None):
     """Conecta a instância via QR Code."""
     passo(3, TOTAL_PASSOS, "Conectar WhatsApp (QR Code)")
 
@@ -539,9 +542,29 @@ def passo_3_conectar(url, instance_name, instance_key):
     print("  Vamos gerar o QR Code para você escanear com o WhatsApp.\n")
 
     qr_exibido = False
+    qr_base64 = ""
+    qr_code_str = ""
 
-    # Tenta obter o QR Code com retries (a instância pode precisar de alguns segundos)
-    for tentativa_qr in range(6):
+    # Verifica se o código QR já veio na etapa de criação (Evolution v2)
+    if dados_criacao:
+        qr_base64 = (
+            dados_criacao.get("base64", "")
+            or dados_criacao.get("qrcode", {}).get("base64", "")
+            if isinstance(dados_criacao.get("qrcode"), dict) else dados_criacao.get("base64", "")
+        )
+        qr_code_str = (
+            dados_criacao.get("code", "")
+            or dados_criacao.get("pairingCode", "")
+            or dados_criacao.get("qrcode", "")
+            if isinstance(dados_criacao.get("qrcode"), str) else dados_criacao.get("code", "")
+        )
+        
+        if qr_base64 or qr_code_str:
+            qr_exibido = _exibir_qr(qr_base64, qr_code_str)
+
+    # Tenta obter o QR Code com retries usando connect
+    tentativas = 6 if not qr_exibido else 0
+    for tentativa_qr in range(tentativas):
         try:
             resp = requests.get(
                 f"{url}/instance/connect/{instance_name}",
@@ -889,10 +912,10 @@ def main():
     url, global_key = passo_1_evolution_api()
 
     # Passo 2: Instância
-    instance_name, instance_key = passo_2_instancia(url, global_key)
+    instance_name, instance_key, dados_criacao = passo_2_instancia(url, global_key)
 
     # Passo 3: Conectar WhatsApp
-    passo_3_conectar(url, instance_name, instance_key)
+    passo_3_conectar(url, instance_name, instance_key, dados_criacao)
 
     # Passo 4: Webhook
     webhook_url, webhook_token = passo_4_webhook(url, instance_name, instance_key)

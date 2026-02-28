@@ -115,17 +115,35 @@ DOCKER_COMPOSE_TEMPLATE = """services:
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - SERVER_PORT=8080
       - SERVER_URL=http://localhost:{porta}
-      - DATABASE_PROVIDER=sqlite
-      - DATABASE_CONNECTION_URI=file:./data/evolution.db
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution@evolution-db:5432/evolution
       - LOG_LEVEL=WARN
       - LOG_COLOR=true
     volumes:
-      - evolution_data:/evolution/data
       - evolution_instances:/evolution/instances
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: evolution-db
+    restart: always
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution
+      - POSTGRES_DB=evolution
+    volumes:
+      - evolution_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  evolution_data:
   evolution_instances:
+  evolution_pgdata:
 """
 
 

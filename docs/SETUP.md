@@ -54,20 +54,38 @@ services:
       - SERVER_PORT=8080
       - SERVER_URL=http://localhost:8080
 
-      # Banco de dados (SQLite local, mais simples)
-      - DATABASE_PROVIDER=sqlite
-      - DATABASE_CONNECTION_URI=file:./data/evolution.db
+      # Banco de dados (PostgreSQL)
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution@evolution-db:5432/evolution
 
       # Logs
       - LOG_LEVEL=WARN
       - LOG_COLOR=true
     volumes:
-      - evolution_data:/evolution/data
       - evolution_instances:/evolution/instances
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: evolution-db
+    restart: always
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution
+      - POSTGRES_DB=evolution
+    volumes:
+      - evolution_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
 
 volumes:
-  evolution_data:
   evolution_instances:
+  evolution_pgdata:
 ```
 
 > **IMPORTANTE:** Troque `sua_chave_global_super_secreta_aqui` por uma chave segura. Essa é a `AUTHENTICATION_API_KEY` que você usará no setup.

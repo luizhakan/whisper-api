@@ -158,8 +158,8 @@ def _verificar_docker():
     return docker_ok, compose_ok, compose_cmd
 
 
-def _aguardar_evolution_api(url, apikey, tentativas=30):
-    """Aguarda a Evolution API ficar pronta (polling)."""
+def _aguardar_evolution_api(url, apikey, tentativas=60):
+    """Aguarda a Evolution API ficar pronta (polling). Padrão: até 2 minutos."""
     for i in range(tentativas):
         try:
             resp = requests.get(
@@ -175,6 +175,40 @@ def _aguardar_evolution_api(url, apikey, tentativas=30):
             print(f"     Aguardando... ({i + 1}/{tentativas})")
         time.sleep(2)
     return False
+
+
+def _aguardar_e_verificar(url, apikey):
+    """
+    Aguarda a Evolution API com rodadas de espera.
+    Se não responder na primeira rodada, oferece esperar mais.
+    """
+    if _aguardar_evolution_api(url, apikey, tentativas=60):
+        print("  ✅ Evolution API está rodando e respondendo!")
+        return True
+
+    # Primeira rodada falhou, oferece esperar mais
+    print("  ⚠️  Evolution API ainda não respondeu após 2 minutos.")
+    print("     Na primeira vez a imagem Docker pode demorar para inicializar.")
+
+    while True:
+        print("\n    1. Esperar mais 2 minutos")
+        print("    2. Continuar o setup mesmo assim")
+        print("    3. Sair do setup\n")
+        escolha = perguntar("Escolha", "1")
+
+        if escolha == "1":
+            print("\n  ⏳ Aguardando mais...")
+            if _aguardar_evolution_api(url, apikey, tentativas=60):
+                print("  ✅ Evolution API está rodando e respondendo!")
+                return True
+            print("  ⚠️  Ainda sem resposta.")
+        elif escolha == "2":
+            return False
+        elif escolha == "3":
+            print("\n  Dica: verifique os logs com 'docker logs evolution-api'")
+            sys.exit(1)
+        else:
+            print("  Opção inválida.")
 
 
 def passo_1_evolution_api():
@@ -299,15 +333,9 @@ def _instalar_evolution_api():
 
     # 6. Aguarda ficar pronto
     print(f"\n  ⏳ Aguardando a Evolution API ficar pronta em {url}...")
+    print("     (na primeira vez pode demorar enquanto o container inicializa)\n")
 
-    if _aguardar_evolution_api(url, apikey):
-        print("  ✅ Evolution API está rodando e respondendo!")
-    else:
-        print("  ⚠️  Evolution API ainda não respondeu.")
-        print("     Pode estar iniciando. Verifique com:")
-        print(f"     docker logs evolution-api")
-        if not confirmar("Continuar o setup?"):
-            sys.exit(1)
+    _aguardar_e_verificar(url, apikey)
 
     print(f"\n  📋 Resumo da instalação:")
     print(f"     URL:       {url}")
@@ -373,8 +401,18 @@ def passo_2_instancia(url, global_key):
     if not instance_name:
         # Criar nova instância
         instance_name = perguntar("Nome da nova instância", "whisper-bot")
+        instance_key = _criar_instancia_com_retry(url, global_key, instance_name)
 
-        print(f"\n  🔄 Criando instância '{instance_name}'...")
+    return instance_name, instance_key
+
+
+def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5):
+    """
+    Tenta criar a instância na Evolution API com retries automáticos.
+    Se a API ainda estiver subindo, aguarda entre tentativas.
+    """
+    for tentativa in range(1, max_tentativas + 1):
+        print(f"\n  🔄 Criando instância '{instance_name}'... (tentativa {tentativa}/{max_tentativas})")
 
         try:
             payload = {
@@ -398,7 +436,6 @@ def passo_2_instancia(url, global_key):
                 instance_key = data.get("hash", data.get("apikey", ""))
 
                 if not instance_key:
-                    # Pode estar em estrutura diferente
                     instance_data = data.get("instance", {})
                     instance_key = instance_data.get("token", "")
 
@@ -408,16 +445,40 @@ def passo_2_instancia(url, global_key):
                 else:
                     print("  ⚠️  Não foi possível obter a API key automaticamente.")
                     instance_key = perguntar("Cole a API Key da instância (hash)")
-            else:
-                print(f"  ❌ Erro ao criar instância: {resp.status_code}")
-                print(f"     {resp.text[:200]}")
-                instance_key = perguntar("Crie manualmente e cole a API Key aqui")
+                return instance_key
 
+            else:
+                print(f"  ❌ Erro: {resp.status_code} — {resp.text[:200]}")
+
+        except requests.ConnectionError:
+            print(f"  ❌ Evolution API não está acessível em {url}")
+            print("     O container pode ainda estar iniciando...")
         except Exception as e:
             print(f"  ❌ Erro: {e}")
-            instance_key = perguntar("Crie manualmente e cole a API Key aqui")
 
-    return instance_name, instance_key
+        # Se não é a última tentativa, oferece opções
+        if tentativa < max_tentativas:
+            print(f"\n     Aguardando 15 segundos antes de tentar novamente...")
+            time.sleep(15)
+        else:
+            # Última tentativa falhou — dá opções ao usuário
+            print(f"\n  ⚠️  Não foi possível criar a instância após {max_tentativas} tentativas.")
+            print("\n    1. Tentar mais vezes")
+            print("    2. Digitar a API Key manualmente (se criou por fora)")
+            print("    3. Sair do setup\n")
+
+            escolha = perguntar("Escolha", "1")
+
+            if escolha == "1":
+                return _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas)
+            elif escolha == "2":
+                return perguntar("API Key da instância (hash)")
+            else:
+                print("\n  Dica: verifique se a Evolution API está rodando com 'docker logs evolution-api'")
+                sys.exit(1)
+
+    # Fallback (não deve chegar aqui)
+    return perguntar("API Key da instância (hash)")
 
 
 def passo_3_conectar(url, instance_name, instance_key):

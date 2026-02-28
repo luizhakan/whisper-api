@@ -133,8 +133,7 @@ DOCKER_COMPOSE_TEMPLATE = """services:
       - POSTGRES_USER=evolution
       - POSTGRES_PASSWORD=evolution
       - POSTGRES_DB=evolution
-    ports:
-      - "5432:5432"
+    # portas removidas para evitar colisão com postgres existente (a API acessa internamente)
     volumes:
       - evolution_db_data:/var/lib/postgresql/data
     healthcheck:

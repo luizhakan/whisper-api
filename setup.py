@@ -19,6 +19,8 @@ import sys
 import time
 import json
 import secrets
+import subprocess
+import shutil
 import requests
 
 # Tenta importar qrcode para renderizar QR no terminal
@@ -100,16 +102,104 @@ def testar_conexao(url, apikey):
 
 TOTAL_PASSOS = 6
 
+DOCKER_COMPOSE_TEMPLATE = """version: "3.7"
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:v2.3.0
+    container_name: evolution-api
+    restart: always
+    ports:
+      - "{porta}:8080"
+    environment:
+      - AUTHENTICATION_TYPE=apikey
+      - AUTHENTICATION_API_KEY={apikey}
+      - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - SERVER_PORT=8080
+      - SERVER_URL=http://localhost:{porta}
+      - DATABASE_PROVIDER=sqlite
+      - DATABASE_CONNECTION_URI=file:./data/evolution.db
+      - LOG_LEVEL=WARN
+      - LOG_COLOR=true
+    volumes:
+      - evolution_data:/evolution/data
+      - evolution_instances:/evolution/instances
+
+volumes:
+  evolution_data:
+  evolution_instances:
+"""
+
+
+def _verificar_docker():
+    """Verifica se Docker e Docker Compose estão instalados."""
+    docker_ok = shutil.which("docker") is not None
+    # Docker Compose pode ser plugin (docker compose) ou standalone (docker-compose)
+    compose_ok = False
+    compose_cmd = None
+
+    if docker_ok:
+        # Tenta 'docker compose' (plugin v2)
+        try:
+            result = subprocess.run(
+                ["docker", "compose", "version"],
+                capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode == 0:
+                compose_ok = True
+                compose_cmd = ["docker", "compose"]
+        except Exception:
+            pass
+
+    if not compose_ok:
+        # Tenta 'docker-compose' (standalone)
+        if shutil.which("docker-compose"):
+            compose_ok = True
+            compose_cmd = ["docker-compose"]
+
+    return docker_ok, compose_ok, compose_cmd
+
+
+def _aguardar_evolution_api(url, apikey, tentativas=30):
+    """Aguarda a Evolution API ficar pronta (polling)."""
+    for i in range(tentativas):
+        try:
+            resp = requests.get(
+                f"{url}/instance/fetchInstances",
+                headers={"apikey": apikey},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                return True
+        except Exception:
+            pass
+        if i % 5 == 0:
+            print(f"     Aguardando... ({i + 1}/{tentativas})")
+        time.sleep(2)
+    return False
+
 
 def passo_1_evolution_api():
-    """Coleta dados de conexão com a Evolution API."""
-    passo(1, TOTAL_PASSOS, "Conexão com a Evolution API")
+    """Verifica se a Evolution API existe ou instala via Docker."""
+    passo(1, TOTAL_PASSOS, "Evolution API")
 
-    print("  Informe os dados de acesso à sua Evolution API.")
-    print("  Se ainda não tem uma, veja: docs/SETUP.md\n")
+    print("  Você já tem a Evolution API instalada e rodando?\n")
+    print("    1. Sim, já tenho rodando")
+    print("    2. Não, quero que o setup instale automaticamente (Docker)\n")
+
+    escolha = perguntar("Escolha", "1")
+
+    if escolha == "2":
+        return _instalar_evolution_api()
+    else:
+        return _conectar_evolution_existente()
+
+
+def _conectar_evolution_existente():
+    """Coleta dados de conexão com uma Evolution API já existente."""
+    print("\n  Informe os dados de acesso à sua Evolution API.\n")
 
     url = perguntar("URL da Evolution API", "http://localhost:8080")
-    # Remove barra final
     url = url.rstrip("/")
 
     global_key = perguntar("API Key global (AUTHENTICATION_API_KEY do .env do servidor)")
@@ -127,6 +217,115 @@ def passo_1_evolution_api():
             sys.exit(1)
 
     return url, global_key
+
+
+def _instalar_evolution_api():
+    """Instala a Evolution API via Docker Compose."""
+    print("\n  🐳 Vamos instalar a Evolution API via Docker.\n")
+
+    # 1. Verifica Docker
+    docker_ok, compose_ok, compose_cmd = _verificar_docker()
+
+    if not docker_ok:
+        print("  ❌ Docker não encontrado no sistema.")
+        print("     Instale o Docker primeiro: https://docs.docker.com/engine/install/")
+        print("\n     Após instalar, rode este setup novamente.")
+        sys.exit(1)
+
+    if not compose_ok:
+        print("  ❌ Docker Compose não encontrado.")
+        print("     Instale: https://docs.docker.com/compose/install/")
+        sys.exit(1)
+
+    print(f"  ✅ Docker encontrado")
+    print(f"  ✅ Docker Compose encontrado ({' '.join(compose_cmd)})\n")
+
+    # 2. Pede configurações
+    porta = perguntar("Porta para a Evolution API", "8080")
+    apikey = perguntar(
+        "Crie uma API Key global (senha para acessar a Evolution API)",
+        secrets.token_urlsafe(24),
+    )
+
+    url = f"http://localhost:{porta}"
+
+    # 3. Define diretório de instalação
+    diretorio_padrao = os.path.expanduser("~/evolution-api")
+    diretorio = perguntar("Diretório de instalação", diretorio_padrao)
+    diretorio = os.path.expanduser(diretorio)
+
+    # 4. Cria o diretório
+    os.makedirs(diretorio, exist_ok=True)
+    compose_file = os.path.join(diretorio, "docker-compose.yml")
+
+    if os.path.exists(compose_file):
+        if not confirmar(f"docker-compose.yml já existe em {diretorio}. Sobrescrever?"):
+            print("\n  Usando o docker-compose.yml existente.")
+        else:
+            _escrever_compose(compose_file, porta, apikey)
+    else:
+        _escrever_compose(compose_file, porta, apikey)
+
+    # 5. Sobe o container
+    print(f"\n  🚀 Subindo a Evolution API...\n")
+
+    try:
+        result = subprocess.run(
+            compose_cmd + ["up", "-d"],
+            cwd=diretorio,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+
+        if result.returncode != 0:
+            print(f"  ❌ Erro ao subir o container:")
+            print(f"     {result.stderr[:500]}")
+            if not confirmar("Deseja continuar o setup mesmo assim?"):
+                sys.exit(1)
+        else:
+            print("  ✅ Container iniciado!")
+            # Mostra o output se tiver algo útil
+            if result.stdout.strip():
+                for line in result.stdout.strip().split("\n")[:5]:
+                    print(f"     {line}")
+
+    except subprocess.TimeoutExpired:
+        print("  ⚠️  Timeout ao subir o container (pode ainda estar baixando a imagem).")
+        print("     Isso é normal na primeira vez — a imagem tem ~500MB.")
+        print("     Verifique com: docker ps")
+    except Exception as e:
+        print(f"  ❌ Erro: {e}")
+        if not confirmar("Continuar mesmo assim?"):
+            sys.exit(1)
+
+    # 6. Aguarda ficar pronto
+    print(f"\n  ⏳ Aguardando a Evolution API ficar pronta em {url}...")
+
+    if _aguardar_evolution_api(url, apikey):
+        print("  ✅ Evolution API está rodando e respondendo!")
+    else:
+        print("  ⚠️  Evolution API ainda não respondeu.")
+        print("     Pode estar iniciando. Verifique com:")
+        print(f"     docker logs evolution-api")
+        if not confirmar("Continuar o setup?"):
+            sys.exit(1)
+
+    print(f"\n  📋 Resumo da instalação:")
+    print(f"     URL:       {url}")
+    print(f"     API Key:   {apikey[:15]}...")
+    print(f"     Diretório: {diretorio}")
+    print(f"     Compose:   {compose_file}")
+
+    return url, apikey
+
+
+def _escrever_compose(path, porta, apikey):
+    """Escreve o docker-compose.yml formatado."""
+    conteudo = DOCKER_COMPOSE_TEMPLATE.format(porta=porta, apikey=apikey)
+    with open(path, "w") as f:
+        f.write(conteudo)
+    print(f"  📄 docker-compose.yml gerado em: {path}")
 
 
 def passo_2_instancia(url, global_key):
@@ -501,9 +700,14 @@ def main():
 
     print("  Este assistente vai configurar a integração entre o Whisper API")
     print("  e o WhatsApp via Evolution API.\n")
+    print("  O que será configurado:")
+    print("    • Evolution API (instala via Docker se necessário)")
+    print("    • Instância WhatsApp + QR Code")
+    print("    • Webhook para receber áudios")
+    print("    • Arquivo .env com todas as variáveis\n")
     print("  Pré-requisitos:")
-    print("    • Evolution API rodando e acessível")
     print("    • Python 3.10+ com dependências instaladas")
+    print("    • Docker (se precisar instalar a Evolution API)")
     print("    • Acesso ao WhatsApp para escanear QR Code\n")
 
     if not confirmar("Pronto para começar?"):

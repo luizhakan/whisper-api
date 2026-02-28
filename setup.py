@@ -330,9 +330,9 @@ def _instalar_evolution_api():
         if not confirmar(f"docker-compose.yml já existe em {diretorio}. Sobrescrever?"):
             print("\n  Usando o docker-compose.yml existente.")
         else:
-            _escrever_compose(compose_file, porta, apikey)
+            _escrever_compose(compose_file, porta, apikey, url)
     else:
-        _escrever_compose(compose_file, porta, apikey)
+        _escrever_compose(compose_file, porta, apikey, url)
 
     # 5. Sobe o container
     print(f"\n  🚀 Subindo a Evolution API...\n")
@@ -382,7 +382,7 @@ def _instalar_evolution_api():
     return url, apikey
 
 
-def _escrever_compose(path, porta, apikey):
+def _escrever_compose(path, porta, apikey, url):
     """Escreve o docker-compose.yml formatado."""
     conteudo = DOCKER_COMPOSE_TEMPLATE.format(porta=porta, apikey=apikey, url=url)
     with open(path, "w") as f:

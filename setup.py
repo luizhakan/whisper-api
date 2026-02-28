@@ -471,7 +471,15 @@ def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5)
 
             if resp.status_code in (200, 201):
                 data = resp.json()
-                instance_key = data.get("hash", data.get("apikey", ""))
+
+                # Evolution v2: hash pode ser dict {"apikey": "..."} ou string
+                hash_field = data.get("hash", {})
+                if isinstance(hash_field, dict):
+                    instance_key = hash_field.get("apikey", "")
+                elif isinstance(hash_field, str):
+                    instance_key = hash_field
+                else:
+                    instance_key = data.get("apikey", "")
 
                 if not instance_key:
                     instance_data = data.get("instance", {})
@@ -521,15 +529,18 @@ def _criar_instancia_com_retry(url, global_key, instance_name, max_tentativas=5)
     return perguntar("API Key da instância (hash)"), {}
 
 
-def passo_3_conectar(url, instance_name, instance_key, dados_criacao=None):
+def passo_3_conectar(url, instance_name, instance_key, dados_criacao=None, global_key=None):
     """Conecta a instância via QR Code."""
     passo(3, TOTAL_PASSOS, "Conectar WhatsApp (QR Code)")
+
+    # Evolution API v2 usa a global key para todos os endpoints
+    api_key = global_key or instance_key
 
     # Verifica se já está conectado
     try:
         resp = requests.get(
             f"{url}/instance/connectionState/{instance_name}",
-            headers={"apikey": instance_key},
+            headers={"apikey": api_key},
             timeout=10,
         )
         data = resp.json()
@@ -548,91 +559,89 @@ def passo_3_conectar(url, instance_name, instance_key, dados_criacao=None):
 
     # Verifica se o código QR já veio na etapa de criação (Evolution v2)
     if dados_criacao:
-        qr_base64 = (
-            dados_criacao.get("base64", "")
-            or dados_criacao.get("qrcode", {}).get("base64", "")
-            if isinstance(dados_criacao.get("qrcode"), dict) else dados_criacao.get("base64", "")
-        )
-        qr_code_str = (
-            dados_criacao.get("code", "")
-            or dados_criacao.get("pairingCode", "")
-            or dados_criacao.get("qrcode", "")
-            if isinstance(dados_criacao.get("qrcode"), str) else dados_criacao.get("code", "")
-        )
-        
+        qr_base64 = dados_criacao.get("base64", "")
+        qr_code_str = dados_criacao.get("code", "") or dados_criacao.get("pairingCode", "")
+
+        # Verifica em sub-objeto qrcode (compatibilidade)
+        qrcode_field = dados_criacao.get("qrcode", "")
+        if isinstance(qrcode_field, dict):
+            qr_base64 = qr_base64 or qrcode_field.get("base64", "")
+            qr_code_str = qr_code_str or qrcode_field.get("code", "")
+        elif isinstance(qrcode_field, str) and qrcode_field:
+            qr_code_str = qr_code_str or qrcode_field
+
         if qr_base64 or qr_code_str:
             qr_exibido = _exibir_qr(qr_base64, qr_code_str)
 
+    # Aguarda a instância inicializar antes de tentar conectar
+    if not qr_exibido:
+        print("  ⏳ Aguardando instância inicializar...")
+        time.sleep(5)
+
     # Tenta obter o QR Code com retries usando connect
-    tentativas = 6 if not qr_exibido else 0
+    tentativas = 12 if not qr_exibido else 0
     for tentativa_qr in range(tentativas):
         try:
             resp = requests.get(
                 f"{url}/instance/connect/{instance_name}",
-                headers={"apikey": instance_key},
+                headers={"apikey": api_key},
                 timeout=30,
             )
 
             if resp.status_code == 200:
                 data = resp.json()
 
-                # Debug: mostra a resposta se não encontrar QR
-                # A resposta pode ter diversas estruturas dependendo da versão
-                qr_base64 = (
-                    data.get("base64", "")
-                    or data.get("qrcode", {}).get("base64", "")
-                    if isinstance(data.get("qrcode"), dict) else data.get("base64", "")
-                )
-                qr_code_str = (
-                    data.get("code", "")
-                    or data.get("pairingCode", "")
-                    or data.get("qrcode", "")
-                    if isinstance(data.get("qrcode"), str) else data.get("code", "")
-                )
+                # Evolution v2: resposta do connect é {code, pairingCode, count}
+                # "code" contém os dados para gerar o QR Code
+                # "base64" pode existir em algumas versões com a imagem QR
+                qr_base64 = data.get("base64", "")
+                qr_code_str = data.get("code", "") or data.get("pairingCode", "")
 
-                # Tenta extrair de qualquer campo que pareça ter dados de QR
+                # Verifica em sub-objetos (compatibilidade com versões anteriores)
                 if not qr_base64 and not qr_code_str:
-                    # Busca recursivamente por campos que parecem QR
+                    qrcode_field = data.get("qrcode", "")
+                    if isinstance(qrcode_field, dict):
+                        qr_base64 = qrcode_field.get("base64", "")
+                        qr_code_str = qrcode_field.get("code", "")
+                    elif isinstance(qrcode_field, str) and qrcode_field:
+                        qr_code_str = qrcode_field
+
+                # Busca genérica por dados de imagem QR
+                if not qr_base64 and not qr_code_str:
                     for key, val in data.items():
                         if isinstance(val, str):
                             if val.startswith("data:image"):
                                 qr_base64 = val
                                 break
                             elif len(val) > 50 and "@" not in val:
-                                # Pode ser o código do QR
                                 qr_code_str = val
                                 break
-                        elif isinstance(val, dict):
-                            for k2, v2 in val.items():
-                                if isinstance(v2, str) and v2.startswith("data:image"):
-                                    qr_base64 = v2
-                                    break
 
                 if qr_base64 or qr_code_str:
                     qr_exibido = _exibir_qr(qr_base64, qr_code_str)
                     if qr_exibido:
                         break
                 else:
-                    # Sem QR na resposta — pode ser cedo demais
-                    if tentativa_qr < 5:
-                        print(f"  ⏳ QR Code ainda não disponível, tentando novamente em 5s... ({tentativa_qr + 1}/6)")
+                    # count == 0 significa que a instância ainda não está pronta
+                    if tentativa_qr < tentativas - 1:
+                        print(f"  ⏳ QR Code ainda não disponível, tentando novamente em 5s... ({tentativa_qr + 1}/{tentativas})")
                         time.sleep(5)
                     else:
                         print("  ⚠️  QR Code não retornado pela API após várias tentativas.")
                         print(f"     Última resposta: {json.dumps(data, indent=2)[:300]}")
             else:
                 print(f"  ⚠️  Resposta {resp.status_code} ao obter QR Code.")
-                if tentativa_qr < 5:
+                if tentativa_qr < tentativas - 1:
                     time.sleep(5)
 
         except Exception as e:
             print(f"  ❌ Erro ao obter QR Code: {e}")
-            if tentativa_qr < 5:
+            if tentativa_qr < tentativas - 1:
                 time.sleep(5)
 
     if not qr_exibido:
         print("\n  ℹ️  Opções para conectar manualmente:")
-        print(f"     curl {url}/instance/connect/{instance_name} -H 'apikey: {instance_key}'")
+        print(f"     curl {url}/instance/connect/{instance_name} -H 'apikey: {api_key}'")
         print("     Ou acesse a interface web da Evolution API.")
 
     # Aguarda o usuário escanear
@@ -645,7 +654,7 @@ def passo_3_conectar(url, instance_name, instance_key, dados_criacao=None):
             try:
                 resp = requests.get(
                     f"{url}/instance/connectionState/{instance_name}",
-                    headers={"apikey": instance_key},
+                    headers={"apikey": api_key},
                     timeout=10,
                 )
                 data = resp.json()
@@ -714,7 +723,7 @@ def _exibir_qr(qr_base64, qr_code_str):
     return False
 
 
-def passo_4_webhook(url, instance_name, instance_key):
+def passo_4_webhook(url, instance_name, instance_key, global_key=None):
     """Configura o webhook na Evolution API."""
     passo(4, TOTAL_PASSOS, "Configuração do Webhook")
 
@@ -761,7 +770,7 @@ def passo_4_webhook(url, instance_name, instance_key):
             f"{url}/webhook/set/{instance_name}",
             json=payload,
             headers={
-                "apikey": instance_key,
+                "apikey": global_key or instance_key,
                 "Content-Type": "application/json",
             },
             timeout=15,
@@ -916,10 +925,10 @@ def main():
     instance_name, instance_key, dados_criacao = passo_2_instancia(url, global_key)
 
     # Passo 3: Conectar WhatsApp
-    passo_3_conectar(url, instance_name, instance_key, dados_criacao)
+    passo_3_conectar(url, instance_name, instance_key, dados_criacao, global_key=global_key)
 
     # Passo 4: Webhook
-    webhook_url, webhook_token = passo_4_webhook(url, instance_name, instance_key)
+    webhook_url, webhook_token = passo_4_webhook(url, instance_name, instance_key, global_key=global_key)
 
     # Passo 5: Número destino
     numero_destino = passo_5_numero_destino()

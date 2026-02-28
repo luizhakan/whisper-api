@@ -510,7 +510,8 @@ def passo_3_conectar(url, instance_name, instance_key):
             headers={"apikey": instance_key},
             timeout=10,
         )
-        state = resp.json().get("instance", {}).get("state", resp.json().get("state", ""))
+        data = resp.json()
+        state = data.get("instance", {}).get("state", data.get("state", ""))
         if state == "open":
             print("  ✅ WhatsApp já está conectado!")
             return
@@ -519,66 +520,85 @@ def passo_3_conectar(url, instance_name, instance_key):
 
     print("  Vamos gerar o QR Code para você escanear com o WhatsApp.\n")
 
-    try:
-        resp = requests.get(
-            f"{url}/instance/connect/{instance_name}",
-            headers={"apikey": instance_key},
-            timeout=30,
-        )
+    qr_exibido = False
 
-        if resp.status_code == 200:
-            data = resp.json()
-            # O QR code pode vir como base64 de imagem ou como string de dados
-            qr_base64 = data.get("base64", "")
-            qr_code_str = data.get("code", data.get("pairingCode", ""))
+    # Tenta obter o QR Code com retries (a instância pode precisar de alguns segundos)
+    for tentativa_qr in range(6):
+        try:
+            resp = requests.get(
+                f"{url}/instance/connect/{instance_name}",
+                headers={"apikey": instance_key},
+                timeout=30,
+            )
 
-            if qr_base64 and TEM_QRCODE:
-                # Extrai os dados do QR a partir do base64
-                # Na verdade, precisamos do texto do QR. Vamos tentar pegar do "code"
-                pass
+            if resp.status_code == 200:
+                data = resp.json()
 
-            if qr_code_str and TEM_QRCODE:
-                # Renderiza QR code como ASCII no terminal
-                qr = qrcode.QRCode(
-                    version=1,
-                    error_correction=qrcode.constants.ERROR_CORRECT_L,
-                    box_size=1,
-                    border=1,
+                # Debug: mostra a resposta se não encontrar QR
+                # A resposta pode ter diversas estruturas dependendo da versão
+                qr_base64 = (
+                    data.get("base64", "")
+                    or data.get("qrcode", {}).get("base64", "")
+                    if isinstance(data.get("qrcode"), dict) else data.get("base64", "")
                 )
-                qr.add_data(qr_code_str)
-                qr.make(fit=True)
-                print("  📱 Escaneie o QR Code abaixo com o WhatsApp:\n")
-                qr.print_ascii(invert=True)
-            elif qr_code_str:
-                print(f"  📱 Dados do QR Code (use um leitor):\n")
-                print(f"  {qr_code_str}")
-            elif qr_base64:
-                # Salva como arquivo PNG
-                import base64 as b64
-                img_data = qr_base64
-                if "," in img_data:
-                    img_data = img_data.split(",", 1)[1]
-                with open("qrcode.png", "wb") as f:
-                    f.write(b64.b64decode(img_data))
-                print("  📱 QR Code salvo em: qrcode.png")
-                print("     Abra o arquivo e escaneie com o WhatsApp.")
-            else:
-                print("  ⚠️  QR Code não retornado pela API.")
-                print(f"     Resposta: {json.dumps(data, indent=2)[:500]}")
-                print("\n  Tente conectar manualmente pela interface da Evolution API.")
-        else:
-            print(f"  ❌ Erro ao obter QR Code: {resp.status_code}")
-            print(f"     {resp.text[:200]}")
+                qr_code_str = (
+                    data.get("code", "")
+                    or data.get("pairingCode", "")
+                    or data.get("qrcode", "")
+                    if isinstance(data.get("qrcode"), str) else data.get("code", "")
+                )
 
-    except Exception as e:
-        print(f"  ❌ Erro: {e}")
+                # Tenta extrair de qualquer campo que pareça ter dados de QR
+                if not qr_base64 and not qr_code_str:
+                    # Busca recursivamente por campos que parecem QR
+                    for key, val in data.items():
+                        if isinstance(val, str):
+                            if val.startswith("data:image"):
+                                qr_base64 = val
+                                break
+                            elif len(val) > 50 and "@" not in val:
+                                # Pode ser o código do QR
+                                qr_code_str = val
+                                break
+                        elif isinstance(val, dict):
+                            for k2, v2 in val.items():
+                                if isinstance(v2, str) and v2.startswith("data:image"):
+                                    qr_base64 = v2
+                                    break
+
+                if qr_base64 or qr_code_str:
+                    qr_exibido = _exibir_qr(qr_base64, qr_code_str)
+                    if qr_exibido:
+                        break
+                else:
+                    # Sem QR na resposta — pode ser cedo demais
+                    if tentativa_qr < 5:
+                        print(f"  ⏳ QR Code ainda não disponível, tentando novamente em 5s... ({tentativa_qr + 1}/6)")
+                        time.sleep(5)
+                    else:
+                        print("  ⚠️  QR Code não retornado pela API após várias tentativas.")
+                        print(f"     Última resposta: {json.dumps(data, indent=2)[:300]}")
+            else:
+                print(f"  ⚠️  Resposta {resp.status_code} ao obter QR Code.")
+                if tentativa_qr < 5:
+                    time.sleep(5)
+
+        except Exception as e:
+            print(f"  ❌ Erro ao obter QR Code: {e}")
+            if tentativa_qr < 5:
+                time.sleep(5)
+
+    if not qr_exibido:
+        print("\n  ℹ️  Opções para conectar manualmente:")
+        print(f"     curl {url}/instance/connect/{instance_name} -H 'apikey: {instance_key}'")
+        print("     Ou acesse a interface web da Evolution API.")
 
     # Aguarda o usuário escanear
     print("\n  ⏳ Aguardando conexão... (escaneie o QR Code com o WhatsApp)")
     print("     Pressione Ctrl+C para pular esta verificação.\n")
 
     try:
-        for tentativa in range(60):  # Até 2 minutos
+        for tentativa in range(90):  # Até 3 minutos
             time.sleep(2)
             try:
                 resp = requests.get(
@@ -586,7 +606,8 @@ def passo_3_conectar(url, instance_name, instance_key):
                     headers={"apikey": instance_key},
                     timeout=10,
                 )
-                state = resp.json().get("instance", {}).get("state", resp.json().get("state", ""))
+                data = resp.json()
+                state = data.get("instance", {}).get("state", data.get("state", ""))
 
                 if state == "open":
                     print("  ✅ WhatsApp conectado com sucesso!")
@@ -594,15 +615,61 @@ def passo_3_conectar(url, instance_name, instance_key):
 
                 # Mostra progresso
                 if tentativa % 5 == 0:
-                    print(f"     Status: {state}... (tentativa {tentativa + 1}/60)")
+                    print(f"     Status: {state}... (tentativa {tentativa + 1}/90)")
 
             except Exception:
                 pass
 
-        print("\n  ⏰ Tempo esgotado. Verifique a conexão pela interface da Evolution API.")
+        print("\n  ⏰ Tempo esgotado.")
+        if not confirmar("Continuar o setup mesmo sem a conexão WhatsApp?"):
+            sys.exit(1)
 
     except KeyboardInterrupt:
         print("\n  ⏭️  Verificação pulada. Continue o setup.")
+
+
+def _exibir_qr(qr_base64, qr_code_str):
+    """Tenta exibir o QR Code no terminal. Retorna True se conseguiu."""
+    import base64 as b64
+
+    # Prioridade 1: código do QR como texto → renderiza como ASCII
+    if qr_code_str and TEM_QRCODE:
+        try:
+            qr = qrcode.QRCode(
+                version=1,
+                error_correction=qrcode.constants.ERROR_CORRECT_L,
+                box_size=1,
+                border=1,
+            )
+            qr.add_data(qr_code_str)
+            qr.make(fit=True)
+            print("  📱 Escaneie o QR Code abaixo com o WhatsApp:\n")
+            qr.print_ascii(invert=True)
+            return True
+        except Exception as e:
+            print(f"  ⚠️  Erro ao renderizar QR: {e}")
+
+    # Prioridade 2: base64 da imagem → salva como PNG
+    if qr_base64:
+        try:
+            img_data = qr_base64
+            if "," in img_data:
+                img_data = img_data.split(",", 1)[1]
+            with open("qrcode.png", "wb") as f:
+                f.write(b64.b64decode(img_data))
+            print("  📱 QR Code salvo em: qrcode.png")
+            print("     Abra o arquivo e escaneie com o WhatsApp.")
+            return True
+        except Exception as e:
+            print(f"  ⚠️  Erro ao salvar QR como imagem: {e}")
+
+    # Prioridade 3: mostra o texto bruto
+    if qr_code_str:
+        print(f"  📱 Dados do QR Code (use um leitor externo):\n")
+        print(f"  {qr_code_str}")
+        return True
+
+    return False
 
 
 def passo_4_webhook(url, instance_name, instance_key):

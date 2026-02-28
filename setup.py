@@ -104,7 +104,7 @@ TOTAL_PASSOS = 6
 
 DOCKER_COMPOSE_TEMPLATE = """services:
   evolution-api:
-    image: atendai/evolution-api:v2.1.1
+    image: atendai/evolution-api:v1.8.2
     container_name: evolution-api
     restart: always
     ports:

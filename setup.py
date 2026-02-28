@@ -676,9 +676,18 @@ def passo_4_webhook(url, instance_name, instance_key):
     """Configura o webhook na Evolution API."""
     passo(4, TOTAL_PASSOS, "Configuração do Webhook")
 
+    # Tenta descobrir o IP público da VPS para ser o padrão
+    ip_publico = "localhost"
+    try:
+        resp_ip = requests.get("https://api.ipify.org", timeout=3)
+        if resp_ip.status_code == 200:
+            ip_publico = resp_ip.text.strip()
+    except Exception:
+        pass
+
     webhook_url = perguntar(
-        "URL pública da sua API FastAPI (onde este servidor roda)",
-        "http://localhost:8000",
+        "URL da sua API FastAPI (Ex: http://IP_DA_VPS:8000)",
+        f"http://{ip_publico}:8000",
     )
     webhook_url = webhook_url.rstrip("/")
 
@@ -716,7 +725,7 @@ def passo_4_webhook(url, instance_name, instance_key):
             timeout=15,
         )
 
-        if resp.status_code == 200:
+        if resp.status_code in (200, 201):
             print("  ✅ Webhook configurado com sucesso!")
         else:
             print(f"  ⚠️  Resposta inesperada: {resp.status_code}")

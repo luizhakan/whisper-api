@@ -104,28 +104,48 @@ TOTAL_PASSOS = 6
 
 DOCKER_COMPOSE_TEMPLATE = """services:
   evolution-api:
-    image: atendai/evolution-api:v1.8.2
+    image: atendai/evolution-api:v2.2.3
     container_name: evolution-api
     restart: always
     ports:
       - "{porta}:8080"
     environment:
-      - SERVER_URL={url}
-      - CORS_ORIGIN=*
-      - CORS_METHODS=GET,POST,PUT,DELETE
-      - CORS_CREDENTIALS=true
-      - LOG_LEVEL=WARN
-      - LOG_COLOR=true
       - AUTHENTICATION_TYPE=apikey
       - AUTHENTICATION_API_KEY={apikey}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
+      - SERVER_PORT=8080
+      - SERVER_URL={url}
+      - DATABASE_PROVIDER=postgresql
+      - DATABASE_CONNECTION_URI=postgresql://evolution:evolution@evolution-db:5432/evolution
+      - LOG_LEVEL=WARN
+      - LOG_COLOR=true
     volumes:
       - evolution_instances:/evolution/instances
-      - evolution_store:/evolution/store
+    depends_on:
+      evolution-db:
+        condition: service_healthy
+
+  evolution-db:
+    image: postgres:16-alpine
+    container_name: evolution-db
+    restart: always
+    environment:
+      - POSTGRES_USER=evolution
+      - POSTGRES_PASSWORD=evolution
+      - POSTGRES_DB=evolution
+    ports:
+      - "5432:5432"
+    volumes:
+      - evolution_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U evolution"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
 volumes:
   evolution_instances:
-  evolution_store:
+  evolution_db_data:
 """
 
 

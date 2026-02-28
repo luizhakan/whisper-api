@@ -114,7 +114,7 @@ DOCKER_COMPOSE_TEMPLATE = """services:
       - AUTHENTICATION_API_KEY={apikey}
       - AUTHENTICATION_EXPOSE_IN_FETCH_INSTANCES=true
       - SERVER_PORT=8080
-      - SERVER_URL=http://localhost:{porta}
+      - SERVER_URL={url}
       - DATABASE_PROVIDER=postgresql
       - DATABASE_CONNECTION_URI=postgresql://evolution:evolution@evolution-db:5432/evolution
       - LOG_LEVEL=WARN
@@ -249,7 +249,16 @@ def _conectar_evolution_existente():
     """Coleta dados de conexão com uma Evolution API já existente."""
     print("\n  Informe os dados de acesso à sua Evolution API.\n")
 
-    url = perguntar("URL da Evolution API", "http://localhost:8080")
+    # IP Público para compor URL
+    ip_publico = "localhost"
+    try:
+        resp_ip = requests.get("https://api.ipify.org", timeout=3)
+        if resp_ip.status_code == 200:
+            ip_publico = resp_ip.text.strip()
+    except Exception:
+        pass
+
+    url = perguntar("URL da Evolution API", f"http://{ip_publico}:8080")
     url = url.rstrip("/")
 
     global_key = perguntar("API Key global (AUTHENTICATION_API_KEY do .env do servidor)")
@@ -297,7 +306,16 @@ def _instalar_evolution_api():
         secrets.token_urlsafe(24),
     )
 
-    url = f"http://localhost:{porta}"
+    # IP Público para compor URL
+    ip_publico = "localhost"
+    try:
+        resp_ip = requests.get("https://api.ipify.org", timeout=3)
+        if resp_ip.status_code == 200:
+            ip_publico = resp_ip.text.strip()
+    except Exception:
+        pass
+
+    url = f"http://{ip_publico}:{porta}"
 
     # 3. Define diretório de instalação
     diretorio_padrao = os.path.expanduser("~/evolution-api")
@@ -366,7 +384,7 @@ def _instalar_evolution_api():
 
 def _escrever_compose(path, porta, apikey):
     """Escreve o docker-compose.yml formatado."""
-    conteudo = DOCKER_COMPOSE_TEMPLATE.format(porta=porta, apikey=apikey)
+    conteudo = DOCKER_COMPOSE_TEMPLATE.format(porta=porta, apikey=apikey, url=url)
     with open(path, "w") as f:
         f.write(conteudo)
     print(f"  📄 docker-compose.yml gerado em: {path}")
@@ -830,7 +848,7 @@ def resumo_final(dados):
   Para verificar se está funcionando:
 
     # Status do webhook:
-    curl http://localhost:8000/webhook/evolution/status
+    curl {dados['webhook_url']}/webhook/evolution/status
 
     # Logs do PM2:
     pm2 logs whisper-api
